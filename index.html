@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <title>PumpRoute UK</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap">
 <style>
 :root{
@@ -316,10 +316,14 @@ input{font:inherit;color:inherit}
 </div>
 
 <div id="toast" class="hidden"></div>
+<div id="diag" class="hidden" style="position:fixed;left:8px;right:8px;bottom:calc(8px + var(--sab));z-index:90;background:#fce8e6;color:#a50e0e;border:1px solid #f4b4ae;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.4;max-height:30vh;overflow:auto"></div>
 
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="vendor/maplibre-gl.js"></script>
 <script>
 "use strict";
+function diag(msg) { try { const d = document.getElementById('diag'); d.classList.remove('hidden'); d.innerHTML += '<div>⚠ ' + String(msg).replace(/[<>&]/g, '') + '</div>'; } catch (e) {} }
+window.addEventListener('error', e => diag((e.message || 'Error') + (e.filename ? ' @' + e.filename.split('/').pop() + ':' + e.lineno : '')));
+window.addEventListener('unhandledrejection', e => diag('Promise: ' + (e.reason && (e.reason.message || e.reason))));
 /* =====================================================================
    PumpRoute UK — single-file sat-nav with on-route fuel prices
    ===================================================================== */
@@ -327,6 +331,8 @@ input{font:inherit;color:inherit}
 // ---------- Config ----------
 const CFG = {
   style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+  fallbackStyle: { version: 8, sources: { osm: { type: 'raster', tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap contributors',
+    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'] } }, layers: [{ id: 'osm', type: 'raster', source: 'osm' }] },
   osrm: ['https://router.project-osrm.org/route/v1/driving/', 'https://routing.openstreetmap.de/routed-car/route/v1/driving/'],
   overpass: ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'],
   photon: 'https://photon.komoot.io/api/',
@@ -834,12 +840,33 @@ function say(text, force) {
 // Map
 // =====================================================================
 let map, puckMarker, destMarker;
+let usingFallback = false, styleReady = false;
 function initMap() {
-  map = new maplibregl.Map({
-    container: 'map', style: CFG.style, center: CFG.ukCenter, zoom: 5.3, attributionControl: { compact: true },
-    maxBounds: [[-12, 48.5], [5, 62]], dragRotate: true, pitchWithRotate: true,
-  });
-  map.on('load', () => {
+  if (!window.maplibregl) { diag('Map library failed to load. Check your internet connection and reopen the app.'); return; }
+  try {
+    map = new maplibregl.Map({
+      container: 'map', style: CFG.style, center: CFG.ukCenter, zoom: 5, minZoom: 4, attributionControl: { compact: true },
+      dragRotate: true, pitchWithRotate: true,
+    });
+  } catch (e) { diag('Map could not start: ' + e.message + (/webgl/i.test(e.message) ? '. Try turning off Low Power Mode or using Chrome/Safari.' : '')); map = null; return; }
+  const useFallback = why => {
+    if (usingFallback || !map) return; usingFallback = true;
+    console.warn('Switching to fallback map:', why);
+    try { map.setStyle(CFG.fallbackStyle); } catch (e) { diag('Map style error: ' + e.message); }
+  };
+  let tileOk = false, tileErr = 0;
+  map.on('data', e => { if (e.dataType === 'source' && e.tile) tileOk = true; });
+  map.on('error', e => { const m = (e && e.error && e.error.message) || ''; if (!styleReady) useFallback(m); else if (!tileOk && ++tileErr > 6) useFallback('tiles: ' + m); else console.warn(m); });
+  setTimeout(() => { if (!styleReady) useFallback('timeout'); }, 9000);
+  setTimeout(() => { if (!styleReady) diag('The map is not loading. Your network may be blocking map servers. Try switching between Wi-Fi and mobile data.'); }, 20000);
+  map.on('style.load', addOverlays);
+  map.on('load', () => { if (!styleReady) addOverlays(); });
+  wireMapEvents();
+}
+function addOverlays() {
+  styleReady = true;
+  if (map.getSource('alts')) return;
+  {
     const empty = { type: 'FeatureCollection', features: [] };
     map.addSource('alts', { type: 'geojson', data: empty });
     map.addSource('route', { type: 'geojson', data: empty, lineMetrics: false });
@@ -855,14 +882,17 @@ function initMap() {
     map.on('click', 'alts-line', e => { const i = e.features?.[0]?.properties?.i; if (i != null && S.mode === 'routes') selectRoute(+i); });
     map.on('click', 'alts-casing', e => { const i = e.features?.[0]?.properties?.i; if (i != null && S.mode === 'routes') selectRoute(+i); });
     if (S.pos) updatePuck();
-  });
+    if (S.routes.length && S.mode === 'routes') selectRoute(S.sel, false);
+  }
+}
+function wireMapEvents() {
   const stopFollow = () => { if (S.mode === 'nav' && S.follow) { S.follow = false; $('btnRecenter').classList.remove('hidden'); } };
   map.on('dragstart', stopFollow); map.on('pitchstart', e => { if (e.originalEvent) stopFollow(); });
   map.on('rotatestart', e => { if (e.originalEvent) stopFollow(); });
   map.on('wheel', stopFollow);
   map.on('touchstart', e => { if (e.originalEvent?.touches?.length > 1) stopFollow(); });
 }
-function setGeo(src, data) { const s = map.getSource(src); if (s) s.setData(data); else map.once('load', () => map.getSource(src)?.setData(data)); }
+function setGeo(src, data) { if (!map) return; const s = map.getSource(src); if (s) s.setData(data); else map.once('load', () => map.getSource(src)?.setData(data)); }
 function lineFeature(coords, props = {}) { return { type: 'Feature', properties: props, geometry: { type: 'LineString', coordinates: coords } }; }
 function fc(features) { return { type: 'FeatureCollection', features }; }
 function trafficFeatures(r, fromIdx = 0) {
@@ -909,6 +939,7 @@ function drawStationMarkers(list, currentAlong = -1) {
   });
 }
 function fitCoords(coords, pad) {
+  if (!map) return;
   let b = new maplibregl.LngLatBounds(coords[0], coords[0]);
   for (let i = 0; i < coords.length; i += Math.max(1, Math.floor(coords.length / 400))) b.extend(coords[i]);
   b.extend(coords[coords.length - 1]);
