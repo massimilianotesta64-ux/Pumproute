@@ -65,6 +65,13 @@ If live prices are unavailable, the app shows real stations with **sample** pric
 ⚙ Settings shows whether prices are live and when they were last refreshed.
 GitHub pauses scheduled jobs if a repository has no activity for 60 days: re-enable it under **Actions**.
 
+## Cheaper fuel alerts
+
+While driving, a chime and a short spoken tip announce a station 0.5–3 miles ahead that is at least
+3p a litre cheaper than your last fill (or than other stations ahead if no last-fill price was entered).
+At most one alert every 15 minutes, never over a turn instruction, each station only once per trip.
+Change the saving or switch alerts off in ⚙ Settings.
+
 ## 6. Test mode
 
 ⚙ Settings → *Test mode: simulate driving* moves the car along the route by itself

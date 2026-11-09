@@ -137,6 +137,8 @@ input{font:inherit;color:inherit}
 #fuelCard .pump.dear{background:#fef7e0}
 #fuelCard .txt{flex:1;min-width:0;font-size:13px;line-height:1.35}
 #fuelCard .ln{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fuelCard.alert{animation:fuelpulse 1.2s ease-in-out 0s 6;box-shadow:0 0 0 3px #0b8043,var(--shadow)}
+@keyframes fuelpulse{50%{box-shadow:0 0 0 7px rgba(11,128,67,.35),var(--shadow)}}
 #fuelCard .ln .badge{font-size:10px;padding:1px 5px}
 #fuelCard .txt b{font-size:15px}
 #fuelCard .price{font-size:20px;font-weight:700;color:var(--green)}
@@ -305,6 +307,9 @@ input{font:inherit;color:inherit}
     <div class="switch"><span>Voice guidance</span><input type="checkbox" id="optVoice"></div>
     <div class="switch"><span>Avoid toll roads (M6 Toll, Dartford…)</span><input type="checkbox" id="optTolls"></div>
     <div class="switch"><span>3D tilted map while driving</span><input type="checkbox" id="optTilt"></div>
+    <div class="switch"><span>Cheaper fuel alerts<br><span class="small muted">Chime and a spoken tip when a station ahead is worth it</span></span><input type="checkbox" id="optAlerts"></div>
+    <label class="lbl">Alert only when saving at least: <span id="alertPOut"></span></label>
+    <div class="range-row"><input id="optAlertP" type="range" min="1" max="10" step="0.5"></div>
 
     <label class="lbl">Live traffic: TomTom API key</label>
     <div class="field sm"><input id="optTomtom" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste free key from my.tomtom.com"><button class="btn btn-outline" style="height:34px;padding:0 12px;font-size:13px" id="btnTestKey" type="button">Test key</button></div>
@@ -356,7 +361,7 @@ const CFG = {
 };
 
 // ---------- Persistent prefs (per device) ----------
-const DEF = { trafficLayer: true, satellite: false, fuel: 'E10', paid: '', radius: 3, voice: true, tolls: false, tilt: true, tomtom: '', feed: '', sim: false, simSpeed: 4 };
+const DEF = { fuelAlerts: true, alertP: 3, trafficLayer: true, satellite: false, fuel: 'E10', paid: '', radius: 3, voice: true, tolls: false, tilt: true, tomtom: '', feed: '', sim: false, simSpeed: 4 };
 function loadPrefs() { try { return Object.assign({}, DEF, JSON.parse(localStorage.getItem('pumproute.prefs') || '{}')); } catch (e) { return Object.assign({}, DEF); } }
 function savePrefs() { try { localStorage.setItem('pumproute.prefs', JSON.stringify(P)); } catch (e) {} }
 const P = loadPrefs();
@@ -913,8 +918,52 @@ function say(text, force) {
   if (!P.voice && !force) return;
   try {
     const u = new SpeechSynthesisUtterance(text); u.lang = 'en-GB'; if (voiceObj) u.voice = voiceObj; u.rate = 1;
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    speechSynthesis.cancel(); speechSynthesis.speak(u); S.lastSpoke = Date.now();
   } catch (e) {}
+}
+// ---- chime (Web Audio; unlocked by the Start tap) ----
+let audioCtx = null;
+function unlockAudio() { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) {} }
+function chime() {
+  try {
+    if (!audioCtx) return; const t = audioCtx.currentTime;
+    [[880, 0], [1320, 0.18]].forEach(([f, d]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f; o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.35, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.45);
+      o.start(t + d); o.stop(t + d + 0.5);
+    });
+  } catch (e) {}
+}
+function spokenPence(d) { const r = Math.round(d * 10) / 10; return (Number.isInteger(r) ? r : r.toFixed(1)) + (r === 1 ? ' penny' : ' pence'); }
+// ---- cheaper-fuel alert ----
+function checkFuelAlert(within) {
+  if (!P.fuelAlerts || S.via || !within.length) return;
+  if (Date.now() - (S.lastFuelAlert || 0) < 15 * 60e3) return;          // at most one every 15 minutes
+  if (Date.now() - (S.lastSpoke || 0) < 5000) return;                     // don't talk over directions
+  const r = S.active, k = nextStepIndex(r, S.along), next = r.steps[k];
+  if (next && next.along - S.along < 500) return;                          // a turn is coming up: wait
+  const paid = parseFloat(P.paid), thr = P.alertP || 3;
+  S.fuelAlerted = S.fuelAlerted || new Set();
+  for (const x of within) {                                                // cheapest first
+    const dist = x.along - S.along;
+    if (dist < 800 || dist > 4800) continue;                               // alert ~0.5–3 miles before
+    if (S.fuelAlerted.has(x.st.id)) continue;
+    let saving, vs;
+    if (paid) { saving = paid - x.price; vs = 'than your last fill'; }
+    else {
+      const others = within.filter(o => o !== x).map(o => o.price);
+      if (others.length < 2) continue;
+      saving = others.reduce((a, b) => a + b, 0) / others.length - x.price; vs = 'than other stations ahead';
+    }
+    if (saving < thr) continue;
+    S.fuelAlerted.add(x.st.id); S.lastFuelAlert = Date.now();
+    S.alertPin = { id: x.st.id, t: Date.now() }; updateFuelAhead();
+    chime();
+    setTimeout(() => say(`Cheaper fuel ahead. ${x.st.brand}, ${spokenPence(saving)} a litre less ${vs}. In ${spokenDist(dist)}${x.d > 400 ? ', ' + spokenDist(x.d) + ' off your route' : ''}. Tap the card for directions.`, true), 700);
+    const card = $('fuelCard'); card.classList.add('alert'); setTimeout(() => card.classList.remove('alert'), 8000);
+    return;
+  }
 }
 
 // =====================================================================
@@ -1432,12 +1481,16 @@ function updateFuelAhead(redraw) {
     card.onclick = cancelVia; show('fuelCard', true); placeRecenter(); return;
   }
   if (!within.length) { show('fuelCard', false); return; }
-  const b = within[0], paid = parseFloat(P.paid), dear = paid && b.price > paid;
+  // after an alert, keep showing the announced station until it is passed (or 4 minutes)
+  let pin = S.alertPin && Date.now() - S.alertPin.t < 240e3 ? within.find(x => x.st.id === S.alertPin.id) : null;
+  if (!pin) S.alertPin = null;
+  const b = pin || within[0], paid = parseFloat(P.paid), dear = paid && b.price > paid;
   card.innerHTML = `<div class="pump ${dear ? 'dear' : ''}"><svg width="22" height="22" viewBox="0 0 24 24" fill="${dear ? '#f29900' : '#0b8043'}"><path d="m19.77 7.23-3.72-3.72L15 4.56l2.11 2.11A2.5 2.5 0 0 0 17.5 11.5c.36 0 .69-.08 1-.21v7.21a1 1 0 0 1-2 0V14a2 2 0 0 0-2-2h-1V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v16h10v-7.5h1.5v5a2.5 2.5 0 0 0 5 0V9c0-.69-.28-1.32-.73-1.77M12 10H6V5h6z"/></svg></div>
-    <div class="txt"><div class="ln"><b>${esc(b.st.brand)}</b>${demoBadge(b.st)}</div><div class="ln">In ${fmtDist(b.along - S.along)} · ${fmtDist(b.d)} off route</div><div class="ln">${shortDiffHTML(b.price) || '<span class="muted">Cheapest in the next 40 mi</span>'}</div></div>
+    <div class="txt"><div class="ln"><b>${esc(b.st.brand)}</b>${demoBadge(b.st)}</div><div class="ln">In ${fmtDist(b.along - S.along)} · ${fmtDist(b.d)} off route</div><div class="ln">${shortDiffHTML(b.price) || (pin ? '<span class="diff save">Cheaper than other stations ahead</span>' : '<span class="muted">Cheapest in the next 40 mi</span>')}</div></div>
     <div class="price ${dear ? 'dear' : ''}">${fmtP(b.price)}</div>`;
   card.onclick = () => previewDetour(b.st);
   show('fuelCard', true); placeRecenter();
+  checkFuelAlert(within);
 }
 function openFuelList() {
   const list = S.mode === 'nav' ? fuelAheadList() : S.routeStations;
@@ -1512,7 +1565,7 @@ async function previewDetour(st) {
   detourCandidate = { det, st };
   setGeo('detour', lineFeature(det.coords.slice(0, rejoinIdx + 1)));
   $('dtCancel').onclick = () => { show('detourSheet', false); setGeo('detour', fc([])); detourCandidate = null; };
-  $('dtGo').onclick = acceptDetour;
+  $('dtGo').onclick = () => { unlockAudio(); acceptDetour(); };
   if (S.mode !== 'nav') fitCoords(det.coords.slice(0, Math.min(det.coords.length, rejoinIdx + 1)), { top: 90, bottom: Math.round(innerHeight * 0.62), left: 40, right: 40 });
 }
 function acceptDetour() {
@@ -1567,6 +1620,8 @@ function openSettings() {
   $('radiusInput2').value = P.radius; $('radiusOut2').textContent = P.radius + ' mi';
   $('radiusInput2').oninput = e => $('radiusOut2').textContent = e.target.value + ' mi';
   $('optVoice').checked = P.voice; $('optTolls').checked = P.tolls; $('optTilt').checked = P.tilt;
+  $('optAlerts').checked = P.fuelAlerts !== false; $('optAlertP').value = P.alertP || 3; $('alertPOut').textContent = (P.alertP || 3) + 'p a litre';
+  $('optAlertP').oninput = e => $('alertPOut').textContent = e.target.value + 'p a litre';
   $('optTomtom').value = P.tomtom; $('optSim').checked = P.sim;
   LIVE.t = 0; liveMeta().then(m => { $('priceStatus').innerHTML = m ? `<span class="badge ok">LIVE</span> Government Fuel Finder prices for ${m.stations.toLocaleString('en-GB')} stations, refreshed ${fmtClock(new Date(m.fetchedAt))}${(Date.now() - Date.parse(m.fetchedAt)) > 864e5 ? ' on ' + new Date(m.fetchedAt).toLocaleDateString('en-GB') : ''}.` : '<span class="badge">SAMPLE</span> Live prices are not available yet, so real stations are shown with sample prices.'; });
   $('optSimSpeed').value = P.simSpeed; $('simSpeedOut').textContent = P.simSpeed + '×';
@@ -1577,6 +1632,7 @@ function saveSettings() {
   const before = JSON.stringify([P.fuel, P.radius, P.tomtom, P.tolls]);
   P.paid = $('paidInput2').value.trim(); P.radius = parseFloat($('radiusInput2').value) || 3;
   P.voice = $('optVoice').checked; P.tolls = $('optTolls').checked; P.tilt = $('optTilt').checked;
+  P.fuelAlerts = $('optAlerts').checked; P.alertP = parseFloat($('optAlertP').value) || 3;
   P.tomtom = $('optTomtom').value.trim().replace(/\s+/g, ''); P.sim = $('optSim').checked; P.simSpeed = +$('optSimSpeed').value || 4;
   savePrefs(); show('settings', false);
   const changed = before !== JSON.stringify([P.fuel, P.radius, P.tomtom, P.tolls]);
@@ -1599,7 +1655,7 @@ function wire() {
   $('btnLayers').onclick = toggleSatellite;
   $('btnTestKey').onclick = () => testTomTomKey($('optTomtom').value); $('btnCloseSettings').onclick = () => show('settings', false); $('btnSaveSettings').onclick = saveSettings;
   $('btnCloseRoutes').onclick = cancelRoutes;
-  $('btnGo').onclick = () => { say(' ', true); startNav(); };
+  $('btnGo').onclick = () => { unlockAudio(); say(' ', true); S.fuelAlerted = new Set(); S.lastFuelAlert = 0; startNav(); };
   $('btnEnd').onclick = () => { say('Route ended.'); endNav(false); };
   $('btnMute').onclick = () => { P.voice = !P.voice; savePrefs(); muteIcon(); if (P.voice) say('Voice guidance on.'); else try { speechSynthesis.cancel(); } catch (e) {} };
   $('btnFuelList').onclick = openFuelList;
