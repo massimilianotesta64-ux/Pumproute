@@ -89,7 +89,7 @@ input{font:inherit;color:inherit}
 #btnLayers{right:calc(12px + var(--sar));top:calc(118px + var(--sat));width:44px;height:44px;overflow:hidden;border:2px solid #fff}
 #btnLayers.nav{top:calc(160px + var(--sat))}
 #btnLayers span{display:block;width:100%;height:100%}
-#btnRecenter{left:50%;transform:translateX(-50%);width:auto;padding:0 18px;bottom:calc(150px + var(--sab));font-weight:500;color:var(--blue);gap:6px;display:flex;align-items:center}
+#btnRecenter{left:50%;transform:translateX(-50%);width:auto;padding:0 18px;top:calc(185px + var(--sat));font-weight:500;color:var(--blue);gap:6px;display:flex;align-items:center}
 
 /* Routes sheet */
 .rcard{border:1.5px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;display:flex;gap:12px;align-items:center;width:100%;text-align:left;background:#fff}
@@ -114,7 +114,7 @@ input{font:inherit;color:inherit}
 .banner .then{background:var(--green-d);padding:7px 14px;font-size:14px;display:flex;align-items:center;gap:8px}
 .banner .then svg{width:22px;height:22px}
 .banner.reroute{background:#5f6368}
-#speed{position:fixed;left:calc(14px + var(--sal));bottom:calc(112px + var(--sab));z-index:14;width:58px;height:58px;border-radius:29px;background:#fff;box-shadow:var(--shadow);
+#speed{position:fixed;left:calc(14px + var(--sal));top:calc(180px + var(--sat));z-index:14;width:58px;height:58px;border-radius:29px;background:#fff;box-shadow:var(--shadow);
   display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
 #speed b{font-size:20px}#speed span{font-size:10px;color:var(--ink2)}
 
@@ -131,7 +131,7 @@ input{font:inherit;color:inherit}
 .round.end{background:var(--red)}
 
 /* Fuel card while driving */
-#fuelCard{position:fixed;left:calc(84px + var(--sal));right:calc(12px + var(--sar));bottom:calc(84px + var(--sab));z-index:15;background:#fff;border-radius:14px;box-shadow:var(--shadow);
+#fuelCard{position:fixed;left:calc(12px + var(--sal));right:calc(12px + var(--sar));bottom:calc(84px + var(--sab));z-index:15;background:#fff;border-radius:14px;box-shadow:var(--shadow);
   padding:10px 12px;display:flex;align-items:center;gap:10px;text-align:left}
 #fuelCard .pump{width:38px;height:38px;border-radius:10px;background:#e6f4ea;display:grid;place-items:center;flex:none}
 #fuelCard .pump.dear{background:#fef7e0}
@@ -1066,17 +1066,21 @@ function toast(msg, action, ms = 4500) {
 function hideToast() { $('toast').classList.add('hidden'); }
 function show(id, on = true) { $(id).classList.toggle('hidden', !on); if (id === 'fuelCard' || id === 'btnRecenter') placeRecenter(); }
 function placeRecenter() {
-  // keep Re-centre just above the fuel card (or the bottom bar) so nothing covers it
-  const b = $('btnRecenter'), card = $('fuelCard'), bar = $('navBottom');
-  const ref = !card.classList.contains('hidden') ? card : (!bar.classList.contains('hidden') ? bar : null);
-  b.style.bottom = ref ? Math.round(innerHeight - ref.getBoundingClientRect().top + 12) + 'px' : '';
+  // one row just under the green directions banner: speed (left), Re-centre (middle), map/satellite (right)
+  const nav = $('navTop');
+  if (nav.classList.contains('hidden')) { $('btnLayers').style.top = ''; return; }
+  const top = Math.round(nav.getBoundingClientRect().bottom + 10);
+  $('speed').style.top = top + 'px';
+  $('btnRecenter').style.top = (top + 5) + 'px';
+  $('btnLayers').style.top = (top + 7) + 'px';
 }
+try { new ResizeObserver(placeRecenter).observe($('navTop')); } catch (e) {}
 window.addEventListener('resize', placeRecenter);
 function setMode(m) {
   S.mode = m;
   show('top', m === 'idle' || m === 'routes'); show('btnLocate', m === 'idle');
   show('routesSheet', m === 'routes');
-  show('btnLayers', m !== 'setup'); $('btnLayers').classList.toggle('nav', m === 'nav'); layersIcon();
+  show('btnLayers', m !== 'setup'); $('btnLayers').classList.toggle('nav', m === 'nav'); layersIcon(); placeRecenter();
   ['navTop', 'navBottom', 'speed'].forEach(id => show(id, m === 'nav'));
   if (m !== 'nav') { show('fuelCard', false); show('btnRecenter', false); }
   show('results', false);
