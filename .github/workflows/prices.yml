@@ -24,10 +24,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
       - name: Server location (for troubleshooting)
         run: curl -s https://ipinfo.io/json | grep -E '"(country|region|org)"' || true
       - name: Build site folder
@@ -43,7 +43,7 @@ jobs:
           PROXY_URL: ${{ secrets.PROXY_URL }}
           PROXY_KEY: ${{ secrets.PROXY_KEY }}
           SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
       - id: deploy
