@@ -1,0 +1,6 @@
+{
+  "name": "pumproute",
+  "private": true,
+  "type": "module",
+  "description": "PumpRoute UK sat-nav. api/ff.js is the London relay for Fuel Finder (deployed on Vercel)."
+}

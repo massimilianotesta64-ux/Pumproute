@@ -7,6 +7,9 @@ const BASE = 'https://www.fuel-finder.service.gov.uk';
 
 export default async function handler(req, res) {
   res.setHeader('x-relay-region', process.env.VERCEL_REGION || 'unknown');
+  if (!req.query.path) { // health check: open this address in a browser
+    return res.status(200).send(`PumpRoute relay is running. Region: ${process.env.VERCEL_REGION || 'unknown'} (should be lhr1). Password set: ${process.env.PROXY_KEY ? 'yes' : 'NO'}`);
+  }
   if (!process.env.PROXY_KEY) return res.status(500).send('PROXY_KEY is not set in Vercel environment variables');
   if (req.headers['x-proxy-key'] !== process.env.PROXY_KEY) return res.status(401).send('Missing or wrong x-proxy-key');
   const path = String(req.query.path || '');

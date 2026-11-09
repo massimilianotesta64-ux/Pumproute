@@ -37,6 +37,7 @@ async function token() {
   const r = await ff("/api/v1/oauth/generate_access_token", null, { method: "POST", headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }, body });
   if (PROXY_URL) console.log("Relay region: " + (r.headers.get("x-relay-region") || "?"));
   if (r.status === 401 && PROXY_URL && /x-proxy-key/.test(await r.clone().text())) throw new Error("Relay refused: PROXY_KEY in GitHub does not match PROXY_KEY in Vercel");
+  if (PROXY_URL && (r.status === 405 || r.status === 404)) throw new Error(`Relay not found (${r.status}). PROXY_URL must look like https://YOUR-PROJECT.vercel.app/api/ff and the Vercel deployment must include api/ff.js`);
   if (r.status === 403) throw new Error("403 from Fuel Finder: probably blocking non-UK servers" + (PROXY_URL ? " (check the relay runs in London: lhr1)" : ". Set up the London relay"));
   if (r.status === 429) throw new Error("429: too many attempts (wrong credentials lock you out for 5 minutes)");
   if (!r.ok) throw new Error(`Token request failed ${r.status}: ${(await r.text()).slice(0, 300)}`);
