@@ -1,6 +1,6 @@
 // PumpRoute service worker: caches the app shell so it opens instantly and installs as an app.
 // Live data (maps, routes, prices, traffic) always comes from the network.
-const CACHE = 'pumproute-v3';
+const CACHE = 'pumproute-v4';
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
@@ -17,7 +17,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
   const isShell = url.origin === location.origin || url.hostname === 'unpkg.com';
-  if (!isShell) return; // network only for APIs and map tiles
+  if (!isShell || url.pathname.includes('/data/')) return; // network only for APIs, map tiles and live prices
   // network first for the page (so updates arrive), cache first for the rest
   if (e.request.mode === 'navigate') {
     e.respondWith(fetch(e.request).then(r => { const copy = r.clone(); caches.open(CACHE).then(c => c.put('./index.html', copy)); return r; })

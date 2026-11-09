@@ -50,25 +50,20 @@ With a key you get traffic-aware routes and arrival times, jams coloured on your
 a traffic layer (traffic-light button), and a "faster route found" alert every 5 minutes.
 Friends can use your key or their own. Without a key, routing still works but ignores traffic.
 
-## 5. Fuel prices: sample now, live later
+## 5. Live fuel prices
 
-Until a live feed is connected, the petrol stations are **real** (from OpenStreetMap)
-but the **prices are samples** and are marked SAMPLE in the app.
+Prices come from the government's **Fuel Finder** scheme. A GitHub job (`.github/workflows/prices.yml`)
+runs every 15 minutes, signs in with your Fuel Finder credentials and publishes the latest prices
+as files on the site. The app reads those files, so no credentials ever reach a phone.
 
-Live prices come from the government's **Fuel Finder** scheme, where every UK forecourt must
-report price changes within 30 minutes. Access needs a free registration through GOV.UK One Login.
-The login keys must not be stored inside the app, so a small proxy holds them.
-When you're ready, register for access and I'll write the proxy (it runs on Cloudflare's free tier).
-Then paste its address into ⚙ Settings → *Live fuel price feed URL*.
+One-off setup in the GitHub repository:
+1. **Settings → Secrets and variables → Actions → New repository secret**: add `FF_CLIENT_ID` and `FF_CLIENT_SECRET`.
+2. **Settings → Pages → Source: GitHub Actions**.
+3. **Actions → Update fuel prices and publish → Run workflow** to start the first run.
 
-The app expects the feed to answer `GET <url>?minLat=..&minLon=..&maxLat=..&maxLon=..` with:
-
-```json
-{ "stations": [ { "id": "123", "lat": 51.75, "lon": -1.26, "brand": "Tesco", "name": "Oxford Extra",
-                  "address": "…", "postcode": "OX1 1AA",
-                  "prices": { "E10": 134.9, "E5": 146.9, "B7": 141.9, "SDV": 155.9 },
-                  "updated": "2026-11-06T07:30:00Z" } ] }
-```
+If live prices are unavailable, the app shows real stations with **sample** prices, clearly labelled.
+⚙ Settings shows whether prices are live and when they were last refreshed.
+GitHub pauses scheduled jobs if a repository has no activity for 60 days: re-enable it under **Actions**.
 
 ## 6. Test mode
 

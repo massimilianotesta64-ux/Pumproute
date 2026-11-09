@@ -304,8 +304,8 @@ input{font:inherit;color:inherit}
     <div id="ttTestOut" class="note" style="font-size:13px"></div>
     <div class="note">With a key: traffic-aware routes and arrival times, jams shown on the map, and faster-route alerts. Without one, routing still works but ignores traffic.</div>
 
-    <label class="lbl">Live fuel price feed URL</label>
-    <div class="field sm"><input id="optFeed" type="url" autocomplete="off" spellcheck="false" placeholder="Your Fuel Finder proxy (leave blank for sample prices)"></div>
+    <label class="lbl">Fuel prices</label>
+    <div id="priceStatus" class="note" style="font-size:13px;margin-top:0">Checking…</div>
     <div class="note">While blank, real UK petrol stations are shown with <b>sample prices</b>. Add your Fuel Finder proxy address here to switch to live government prices.</div>
 
     <div class="switch" style="margin-top:8px"><span>Test mode: simulate driving<br><span class="small muted">Moves along the route without GPS, for trying the app at home</span></span><input type="checkbox" id="optSim"></div>
@@ -804,24 +804,58 @@ async function overpass(query) {
   }
   throw lastErr;
 }
+let LIVE = { meta: undefined, t: 0, tiles: new Map() };
+async function liveMeta() {
+  if (LIVE.meta !== undefined && Date.now() - LIVE.t < 10 * 60e3) return LIVE.meta;
+  let m = null;
+  try { m = await getJSON('data/meta.json?t=' + Math.floor(Date.now() / 300000), {}, 10000); } catch (e) { console.warn('No live price data', e); }
+  const ok = m && m.stations > 0 && m.fetchedAt;
+  if (ok && LIVE.meta && LIVE.meta.fetchedAt !== m.fetchedAt) { // newer prices published: reload tiles
+    LIVE.tiles.clear(); for (const [id, st] of S.stations) if (!st.demo) S.stations.delete(id);
+    if (S.active) S.active._stationsLoaded = false; S.routes.forEach(r => r._stationsLoaded = false);
+  }
+  if (ok) for (const [id, st] of S.stations) if (st.demo) S.stations.delete(id); // live replaces samples
+  LIVE.meta = ok ? m : null; LIVE.t = Date.now();
+  return LIVE.meta;
+}
+function addLiveStation(x) {
+  const id = 'ff' + x.id, prices = {}, upd = {}, fuels = {};
+  for (const k of ['E10', 'E5', 'B7', 'SDV']) { if (x.p[k]) { prices[k] = x.p[k][0]; upd[k] = x.p[k][1]; } fuels[k] = !!x.p[k]; }
+  const brand = x.brand || x.name || 'Petrol station', name = x.name && x.name.toLowerCase() !== brand.toLowerCase() ? x.name : '';
+  S.stations.set(id, { id, lat: x.lat, lon: x.lng, brand: titleCase(brand), name: titleCase(name), addr: [titleCase(x.addr), x.pc].filter(Boolean).join(', '),
+    prices, updated: upd, fuels, demo: false, motorway: !!x.mway || MOTORWAY.test(brand + ' ' + name) });
+}
+function titleCase(t) { return t && t === t.toUpperCase() ? t.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()) : (t || ''); }
+function ageText(iso) {
+  if (!iso) return ''; const h = (Date.now() - Date.parse(iso)) / 36e5;
+  if (h < 1) return 'updated in the last hour'; if (h < 24) return `updated ${Math.round(h)} h ago`;
+  const d = Math.round(h / 24); return `unchanged for ${d} day${d > 1 ? 's' : ''}`;
+}
 async function loadStationsFor(r, onChunk) {
   if (r._stationsLoaded) return; r._stationsLoaded = true;
   const radius = Math.round(P.radius * 1609 + 300);
-  if (P.feed) {
-    let minLat = 90, minLon = 180, maxLat = -90, maxLon = -180;
-    for (const c of r.coords) { minLat = Math.min(minLat, c[1]); maxLat = Math.max(maxLat, c[1]); minLon = Math.min(minLon, c[0]); maxLon = Math.max(maxLon, c[0]); }
-    const pad = 0.1;
-    const u = new URL(P.feed); u.searchParams.set('minLat', (minLat - pad).toFixed(4)); u.searchParams.set('maxLat', (maxLat + pad).toFixed(4));
-    u.searchParams.set('minLon', (minLon - pad).toFixed(4)); u.searchParams.set('maxLon', (maxLon + pad).toFixed(4));
+  const live = await liveMeta();
+  if (live) {
     try {
-      const j = await getJSON(u.toString(), {}, 40000);
-      for (const s of (j.stations || j)) {
-        S.stations.set('f' + s.id, { id: 'f' + s.id, lat: +s.lat, lon: +s.lon, brand: s.brand || s.name || 'Petrol station', name: s.name && s.name !== s.brand ? s.name : '', addr: [s.address, s.postcode].filter(Boolean).join(', '),
-          prices: s.prices || {}, fuels: { E10: !!s.prices?.E10, E5: !!s.prices?.E5, B7: !!s.prices?.B7, SDV: !!s.prices?.SDV }, demo: false, updated: s.updated, motorway: MOTORWAY.test((s.brand || '') + ' ' + (s.name || '')) });
+      const keys = new Set(), have = new Set(live.tiles);
+      const dLat = (P.radius * 1609 + 500) / 111000;
+      for (const p of routeSamplePoints(r, 3000)) {
+        const dLon = dLat / Math.cos(p.lat * D2R);
+        for (let a = Math.floor((p.lat - dLat) / live.tile.lat); a <= Math.floor((p.lat + dLat) / live.tile.lat); a++)
+          for (let b = Math.floor((p.lon - dLon) / live.tile.lng); b <= Math.floor((p.lon + dLon) / live.tile.lng); b++) { const k = a + '_' + b; if (have.has(k)) keys.add(k); }
+      }
+      const todo = [...keys].filter(k => !LIVE.tiles.has(k));
+      for (let i = 0; i < todo.length; i += 6) {
+        await Promise.all(todo.slice(i, i + 6).map(async k => {
+          const list = await getJSON(`data/t/${k}.json?v=${encodeURIComponent(live.fetchedAt)}`, {}, 15000);
+          LIVE.tiles.set(k, true);
+          for (const x of list) addLiveStation(x);
+        }));
+        onChunk && onChunk();
       }
       onChunk && onChunk();
       return;
-    } catch (e) { console.warn('Feed failed', e); toast('Live price feed unreachable, showing sample prices'); }
+    } catch (e) { console.warn('Live price tiles failed', e); r._stationsLoaded = false; toast('Live prices could not be loaded just now'); return; }
   }
   const pts = routeSamplePoints(r, 2000), CH = 70;
   for (let i = 0; i < pts.length; i += CH - 1) {
@@ -1354,7 +1388,7 @@ function updateFuelAhead(redraw) {
 function openFuelList() {
   const list = S.mode === 'nav' ? fuelAheadList() : S.routeStations;
   const box = $('fuelList');
-  $('fuelListNote').innerHTML = `${CFG.fuelNames[P.fuel]} within ${P.radius} mi of your route, cheapest first.${[...S.stations.values()].some(s => s.demo) ? ' <span class="badge">SAMPLE PRICES</span>' : ''}`;
+  $('fuelListNote').innerHTML = `${CFG.fuelNames[P.fuel]} within ${P.radius} mi of your route, cheapest first.${[...S.stations.values()].some(s => s.demo) ? ' <span class="badge">SAMPLE PRICES</span>' : (S.stations.size ? ' <span class="badge ok">LIVE PRICES</span>' : '')}`;
   if (!list.length) box.innerHTML = `<div class="muted" style="padding:16px 0">No stations found ahead yet.</div>`;
   else {
     box.innerHTML = '';
@@ -1362,7 +1396,7 @@ function openFuelList() {
       const b = document.createElement('button'); b.className = 'st';
       const ahead = S.mode === 'nav' ? x.along - S.along : x.along;
       b.innerHTML = `<div class="p ${i === 0 ? 'best' : ''}">${fmtP(x.price)}p</div><div style="flex:1;min-width:0"><div class="n">${esc(x.st.brand)}${x.st.name ? ' <span class="muted" style="font-weight:400">· ' + esc(x.st.name) + '</span>' : ''}</div>
-        <div class="d">In ${fmtDist(ahead)} · ${fmtDist(x.d)} off route${x.st.motorway ? ' · motorway services' : ''}</div>${priceDiffHTML(x.price)}</div>
+        <div class="d">In ${fmtDist(ahead)} · ${fmtDist(x.d)} off route${x.st.motorway ? ' · motorway services' : ''}${x.st.updated && x.st.updated[P.fuel] ? ' · ' + ageText(x.st.updated[P.fuel]) : ''}</div>${priceDiffHTML(x.price)}</div>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="#5f6368"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>`;
       b.onclick = () => { show('fuelSheet', false); previewDetour(x.st); };
       box.appendChild(b);
@@ -1411,6 +1445,7 @@ async function previewDetour(st) {
     <div class="row" style="justify-content:space-between;align-items:flex-start">
       <div style="min-width:0"><h3 style="margin:0 0 2px">${esc(st.brand)}${demoBadge(st)}</h3>
       <div class="small muted">${esc([st.name, st.addr].filter(Boolean).join(' · '))}</div>
+      ${st.updated && st.updated[P.fuel] ? `<div class="small muted">Price ${ageText(st.updated[P.fuel])}</div>` : ''}
       ${priceDiffHTML(price)}</div>
       <div style="text-align:right"><div style="font-size:24px;font-weight:700;color:var(--green)">${fmtP(price)}p</div><div class="small muted">${CFG.fuelShort[P.fuel]} / litre</div></div>
     </div>
@@ -1478,19 +1513,19 @@ function openSettings() {
   $('radiusInput2').value = P.radius; $('radiusOut2').textContent = P.radius + ' mi';
   $('radiusInput2').oninput = e => $('radiusOut2').textContent = e.target.value + ' mi';
   $('optVoice').checked = P.voice; $('optTolls').checked = P.tolls; $('optTilt').checked = P.tilt;
-  $('optTomtom').value = P.tomtom; $('optFeed').value = P.feed; $('optSim').checked = P.sim;
+  $('optTomtom').value = P.tomtom; $('optSim').checked = P.sim;
+  LIVE.t = 0; liveMeta().then(m => { $('priceStatus').innerHTML = m ? `<span class="badge ok">LIVE</span> Government Fuel Finder prices for ${m.stations.toLocaleString('en-GB')} stations, refreshed ${fmtClock(new Date(m.fetchedAt))}${(Date.now() - Date.parse(m.fetchedAt)) > 864e5 ? ' on ' + new Date(m.fetchedAt).toLocaleDateString('en-GB') : ''}.` : '<span class="badge">SAMPLE</span> Live prices are not available yet, so real stations are shown with sample prices.'; });
   $('optSimSpeed').value = P.simSpeed; $('simSpeedOut').textContent = P.simSpeed + '×';
   $('optSimSpeed').oninput = e => $('simSpeedOut').textContent = e.target.value + '×';
   show('settings', true);
 }
 function saveSettings() {
-  const before = JSON.stringify([P.fuel, P.radius, P.tomtom, P.feed, P.tolls]);
+  const before = JSON.stringify([P.fuel, P.radius, P.tomtom, P.tolls]);
   P.paid = $('paidInput2').value.trim(); P.radius = parseFloat($('radiusInput2').value) || 3;
   P.voice = $('optVoice').checked; P.tolls = $('optTolls').checked; P.tilt = $('optTilt').checked;
-  P.tomtom = $('optTomtom').value.trim().replace(/\s+/g, ''); P.feed = $('optFeed').value.trim(); P.sim = $('optSim').checked; P.simSpeed = +$('optSimSpeed').value || 4;
+  P.tomtom = $('optTomtom').value.trim().replace(/\s+/g, ''); P.sim = $('optSim').checked; P.simSpeed = +$('optSimSpeed').value || 4;
   savePrefs(); show('settings', false);
-  const changed = before !== JSON.stringify([P.fuel, P.radius, P.tomtom, P.feed, P.tolls]);
-  if (changed && P.feed) { S.stations.clear(); }
+  const changed = before !== JSON.stringify([P.fuel, P.radius, P.tomtom, P.tolls]);
   if (S.mode === 'routes' && changed) { S.routes.forEach(r => r._stationsLoaded = false); refreshRouteFuel(S.routes[S.sel]); }
   if (S.mode === 'nav') { if (S.active) { S.active._near = null; if (changed) { S.active._stationsLoaded = false; loadStationsFor(S.active, () => updateFuelAhead(true)); } } updateFuelAhead(true); muteIcon(); if (P.sim && !S.sim) startSim(); if (!P.sim) stopSim(); }
 }
