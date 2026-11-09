@@ -10,6 +10,19 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const OUT = (process.argv[2] || "dist") + "/data";
 const BASE = process.env.FF_BASE_URL || "https://www.fuel-finder.service.gov.uk";
+// Optional London relay (Vercel). Fuel Finder blocks non-UK servers such as GitHub's.
+const PROXY_URL = (process.env.PROXY_URL || "").trim(), PROXY_KEY = (process.env.PROXY_KEY || "").trim();
+function ff(path, query, init = {}) {
+  init.headers = Object.assign({ "user-agent": UA, accept: "application/json" }, init.headers || {});
+  if (PROXY_URL) {
+    const u = new URL(PROXY_URL); u.searchParams.set("path", path);
+    for (const [k, v] of Object.entries(query || {})) u.searchParams.set(k, v);
+    init.headers["x-proxy-key"] = PROXY_KEY;
+    return fetch(u, init);
+  }
+  const qs = new URLSearchParams(query || {}).toString();
+  return fetch(BASE + path + (qs ? "?" + qs : ""), init);
+}
 const UA = "PumpRoute/1.0 (+https://github.com/" + (process.env.GITHUB_REPOSITORY || "pumproute") + ")";
 const TILE = { lat: 0.25, lng: 0.4 };
 const MAX_AGE_DAYS = 30;
@@ -19,11 +32,12 @@ const FUEL_MAP = { E10: "E10", E5: "E5", B7: "B7", B7_STANDARD: "B7", SDV: "SDV"
 async function token() {
   const { FF_CLIENT_ID: id, FF_CLIENT_SECRET: secret } = process.env;
   if (!id || !secret) throw new Error("Secrets FF_CLIENT_ID / FF_CLIENT_SECRET are not set in the repository");
-  const r = await fetch(`${BASE}/api/v1/oauth/generate_access_token`, {
-    method: "POST", headers: { "content-type": "application/json", accept: "application/json", "user-agent": UA },
-    body: JSON.stringify({ client_id: id.trim(), client_secret: secret.trim() }),
-  });
-  if (r.status === 403) throw new Error("403 from Fuel Finder: probably blocking non-UK servers");
+  if (PROXY_URL) console.log("Using London relay " + new URL(PROXY_URL).host);
+  const body = JSON.stringify({ client_id: id.trim(), client_secret: secret.trim() });
+  const r = await ff("/api/v1/oauth/generate_access_token", null, { method: "POST", headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }, body });
+  if (PROXY_URL) console.log("Relay region: " + (r.headers.get("x-relay-region") || "?"));
+  if (r.status === 401 && PROXY_URL && /x-proxy-key/.test(await r.clone().text())) throw new Error("Relay refused: PROXY_KEY in GitHub does not match PROXY_KEY in Vercel");
+  if (r.status === 403) throw new Error("403 from Fuel Finder: probably blocking non-UK servers" + (PROXY_URL ? " (check the relay runs in London: lhr1)" : ". Set up the London relay"));
   if (r.status === 429) throw new Error("429: too many attempts (wrong credentials lock you out for 5 minutes)");
   if (!r.ok) throw new Error(`Token request failed ${r.status}: ${(await r.text()).slice(0, 300)}`);
   const b = await r.json(); const t = (b.data || b).access_token;
@@ -36,7 +50,7 @@ async function batched(tok, path) {
   for (let n = 1; n <= 100; n++) {
     let r;
     for (let attempt = 1; attempt <= 3; attempt++) {
-      r = await fetch(`${BASE}${path}?batch-number=${n}`, { headers: { authorization: `Bearer ${tok}`, accept: "application/json", "user-agent": UA } });
+      r = await ff(path, { "batch-number": String(n) }, { headers: { authorization: `Bearer ${tok}` } });
       if (r.status !== 429 && r.status < 500) break;
       await new Promise(res => setTimeout(res, 2000 * attempt));
     }
