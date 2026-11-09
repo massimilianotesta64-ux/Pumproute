@@ -86,6 +86,9 @@ input{font:inherit;color:inherit}
 /* Floating buttons */
 .fab{position:fixed;z-index:14;width:48px;height:48px;border-radius:24px;background:#fff;box-shadow:var(--shadow);display:grid;place-items:center}
 #btnLocate{right:calc(14px + var(--sar));bottom:calc(30px + var(--sab))}
+#btnLayers{right:calc(12px + var(--sar));top:calc(118px + var(--sat));width:44px;height:44px;overflow:hidden;border:2px solid #fff}
+#btnLayers.nav{top:calc(160px + var(--sat))}
+#btnLayers span{display:block;width:100%;height:100%}
 #btnRecenter{left:50%;transform:translateX(-50%);width:auto;padding:0 18px;bottom:calc(150px + var(--sab));font-weight:500;color:var(--blue);gap:6px;display:flex;align-items:center}
 
 /* Routes sheet */
@@ -228,6 +231,7 @@ input{font:inherit;color:inherit}
   <div class="from" id="fromChip"><span class="dot"></span><span id="fromTxt">Waiting for your location…</span></div>
 </div>
 
+<button class="fab hidden" id="btnLayers" aria-label="Map or satellite"><span id="layersIcon"></span></button>
 <button class="fab hidden" id="btnLocate" aria-label="My location"><svg width="24" height="24" viewBox="0 0 24 24" fill="#1a73e8"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8m8.94 3A9 9 0 0 0 13 3.06V1h-2v2.06A9 9 0 0 0 3.06 11H1v2h2.06A9 9 0 0 0 11 20.94V23h2v-2.06A9 9 0 0 0 20.94 13H23v-2zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14"/></svg></button>
 
 <!-- ============ ROUTES SHEET ============ -->
@@ -350,7 +354,7 @@ const CFG = {
 };
 
 // ---------- Persistent prefs (per device) ----------
-const DEF = { fuel: 'E10', paid: '', radius: 3, voice: true, tolls: false, tilt: true, tomtom: '', feed: '', sim: false, simSpeed: 4 };
+const DEF = { trafficLayer: true, satellite: false, fuel: 'E10', paid: '', radius: 3, voice: true, tolls: false, tilt: true, tomtom: '', feed: '', sim: false, simSpeed: 4 };
 function loadPrefs() { try { return Object.assign({}, DEF, JSON.parse(localStorage.getItem('pumproute.prefs') || '{}')); } catch (e) { return Object.assign({}, DEF); } }
 function savePrefs() { try { localStorage.setItem('pumproute.prefs', JSON.stringify(P)); } catch (e) {} }
 const P = loadPrefs();
@@ -931,6 +935,7 @@ function initMap() {
 }
 function addOverlays() {
   styleReady = true;
+  setTimeout(() => { if (P.satellite && P.tomtom) satelliteTiles(true); if (S.mode === 'nav' && S.trafficOn) trafficTiles(true); }, 0);
   if (map.getSource('alts')) return;
   {
     const empty = { type: 'FeatureCollection', features: [] };
@@ -1011,8 +1016,33 @@ function fitCoords(coords, pad) {
   b.extend(coords[coords.length - 1]);
   map.fitBounds(b, { padding: pad || { top: 90, bottom: Math.round(innerHeight * 0.5), left: 40, right: 40 }, duration: 700, bearing: 0, pitch: 0, maxZoom: 15 });
 }
+function firstSymbolLayer() {
+  const ls = map.getStyle().layers || [];
+  const sym = ls.find(l => l.type === 'symbol');
+  return sym ? sym.id : (map.getLayer('alts-casing') ? 'alts-casing' : undefined);
+}
+function satelliteTiles(on) {
+  if (!map || !styleReady) return;
+  if (on) {
+    if (!map.getSource('sat')) {
+      map.addSource('sat', { type: 'raster', tileSize: 256, maxzoom: 19, attribution: 'Imagery © TomTom',
+        tiles: [`${CFG.tomtom}map/1/tile/sat/main/{z}/{x}/{y}.jpg?key=${encodeURIComponent(P.tomtom)}`] });
+      map.addLayer({ id: 'sat', type: 'raster', source: 'sat' }, firstSymbolLayer());
+    }
+  } else if (map.getLayer('sat')) { map.removeLayer('sat'); map.removeSource('sat'); }
+}
+function layersIcon() {
+  // preview of the OTHER view, like Google Maps
+  $('layersIcon').innerHTML = P.satellite
+    ? `<svg viewBox="0 0 40 40" width="100%" height="100%"><rect width="40" height="40" fill="#e8eaed"/><path d="M0 26 40 14M14 0l6 40M0 8h40" stroke="#fff" stroke-width="4"/><path d="M0 26 40 14" stroke="#fbbc04" stroke-width="2"/><text x="20" y="36" font-size="8" text-anchor="middle" fill="#3c4043" font-family="Roboto,Arial" font-weight="700">MAP</text></svg>`
+    : `<svg viewBox="0 0 40 40" width="100%" height="100%"><defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4a6b3a"/><stop offset=".5" stop-color="#6d7f4c"/><stop offset="1" stop-color="#3b5a3a"/></linearGradient></defs><rect width="40" height="40" fill="url(#sg)"/><path d="M0 24 40 12" stroke="#cfc6a8" stroke-width="3"/><circle cx="10" cy="10" r="5" fill="#2f4a2a"/><circle cx="30" cy="30" r="6" fill="#2f4a2a"/><text x="20" y="36" font-size="8" text-anchor="middle" fill="#fff" font-family="Roboto,Arial" font-weight="700">SAT</text></svg>`;
+}
+function toggleSatellite() {
+  if (!P.tomtom) { toast('Satellite view uses your TomTom key. Add it in ⚙ Settings first.'); return; }
+  P.satellite = !P.satellite; savePrefs(); satelliteTiles(P.satellite); layersIcon();
+}
 function trafficTiles(on) {
-  if (!map || !map.isStyleLoaded()) return;
+  if (!map || !styleReady) return;
   if (on && P.tomtom) {
     if (!map.getSource('tt-flow')) {
       map.addSource('tt-flow', { type: 'raster', tileSize: 256, tiles: [`${CFG.tomtom}traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${encodeURIComponent(P.tomtom)}&tileSize=256`] });
@@ -1036,6 +1066,7 @@ function setMode(m) {
   S.mode = m;
   show('top', m === 'idle' || m === 'routes'); show('btnLocate', m === 'idle');
   show('routesSheet', m === 'routes');
+  show('btnLayers', m !== 'setup'); $('btnLayers').classList.toggle('nav', m === 'nav'); layersIcon();
   ['navTop', 'navBottom', 'speed'].forEach(id => show(id, m === 'nav'));
   if (m !== 'nav') { show('fuelCard', false); show('btnRecenter', false); }
   show('results', false);
@@ -1209,7 +1240,7 @@ async function startNav() {
   setMode('nav'); S.follow = true; setPuckNav(true);
   muteIcon();
   $('btnTraffic').classList.toggle('hidden', !P.tomtom);
-  S.trafficOn = !!P.tomtom; trafficTiles(S.trafficOn); $('btnTraffic').classList.toggle('on', S.trafficOn);
+  S.trafficOn = !!P.tomtom && P.trafficLayer !== false; trafficTiles(S.trafficOn); $('btnTraffic').classList.toggle('on', S.trafficOn);
   S.lastTrafficCheck = Date.now();
   requestWake();
   say(`Starting route to ${S.dest.label}. ${spokenDur(r.duration)}.`, false);
@@ -1543,13 +1574,14 @@ function muteIcon() {
 function wire() {
   initSetup(); initSearch();
   $('btnSettings').onclick = openSettings;
+  $('btnLayers').onclick = toggleSatellite;
   $('btnTestKey').onclick = () => testTomTomKey($('optTomtom').value); $('btnCloseSettings').onclick = () => show('settings', false); $('btnSaveSettings').onclick = saveSettings;
   $('btnCloseRoutes').onclick = cancelRoutes;
   $('btnGo').onclick = () => { say(' ', true); startNav(); };
   $('btnEnd').onclick = () => { say('Route ended.'); endNav(false); };
   $('btnMute').onclick = () => { P.voice = !P.voice; savePrefs(); muteIcon(); if (P.voice) say('Voice guidance on.'); else try { speechSynthesis.cancel(); } catch (e) {} };
   $('btnFuelList').onclick = openFuelList;
-  $('btnTraffic').onclick = () => { S.trafficOn = !S.trafficOn; trafficTiles(S.trafficOn); $('btnTraffic').classList.toggle('on', S.trafficOn); };
+  $('btnTraffic').onclick = () => { S.trafficOn = !S.trafficOn; P.trafficLayer = S.trafficOn; savePrefs(); toast(S.trafficOn ? 'Traffic shown on the map' : 'Traffic hidden from the map', null, 2000); trafficTiles(S.trafficOn); $('btnTraffic').classList.toggle('on', S.trafficOn); };
   $('btnOverview').onclick = () => { if (!S.active) return; S.follow = false; show('btnRecenter', true); fitCoords(S.active.coords.slice(S.lastIdx), { top: 170, bottom: 120, left: 40, right: 40 }); };
   $('btnRecenter').onclick = () => { S.follow = true; show('btnRecenter', false); if (S.pos) navTick(Object.assign({}, S.pos)); };
   $('btnLocate').onclick = () => { if (S.pos) map.easeTo({ center: [S.pos.lon, S.pos.lat], zoom: 14 }); else startGPS(); };
