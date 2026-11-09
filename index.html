@@ -136,6 +136,8 @@ input{font:inherit;color:inherit}
 #fuelCard .pump{width:38px;height:38px;border-radius:10px;background:#e6f4ea;display:grid;place-items:center;flex:none}
 #fuelCard .pump.dear{background:#fef7e0}
 #fuelCard .txt{flex:1;min-width:0;font-size:13px;line-height:1.35}
+#fuelCard .ln{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fuelCard .ln .badge{font-size:10px;padding:1px 5px}
 #fuelCard .txt b{font-size:15px}
 #fuelCard .price{font-size:20px;font-weight:700;color:var(--green)}
 #fuelCard .price.dear{color:var(--amber)}
@@ -891,6 +893,12 @@ function priceDiffHTML(price) {
   if (Math.abs(d) < 0.05) return `<span class="diff">Same as you paid</span>`;
   return d > 0 ? `<span class="diff save">${d.toFixed(1)}p/L cheaper than you paid</span>` : `<span class="diff more">${(-d).toFixed(1)}p/L more than you paid</span>`;
 }
+function shortDiffHTML(price) {
+  const paid = parseFloat(P.paid); if (!paid || price == null) return '';
+  const d = paid - price;
+  if (Math.abs(d) < 0.05) return `<span class="diff">Same as your last fill</span>`;
+  return d > 0 ? `<span class="diff save">${d.toFixed(1)}p/L cheaper than last fill</span>` : `<span class="diff more">${(-d).toFixed(1)}p/L dearer than last fill</span>`;
+}
 function demoBadge(st) { return st && st.demo ? ' <span class="badge" title="Sample price, not live">SAMPLE</span>' : (st && !st.demo ? ' <span class="badge ok">LIVE</span>' : ''); }
 
 // =====================================================================
@@ -1420,13 +1428,13 @@ function updateFuelAhead(redraw) {
   const card = $('fuelCard');
   if (S.via && !S.viaReached) {
     card.innerHTML = `<div class="pump"><svg width="22" height="22" viewBox="0 0 24 24" fill="#0b8043"><path d="m19.77 7.23-3.72-3.72L15 4.56l2.11 2.11A2.5 2.5 0 0 0 17.5 11.5c.36 0 .69-.08 1-.21v7.21a1 1 0 0 1-2 0V14a2 2 0 0 0-2-2h-1V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v16h10v-7.5h1.5v5a2.5 2.5 0 0 0 5 0V9c0-.69-.28-1.32-.73-1.77M12 10H6V5h6z"/></svg></div>
-      <div class="txt"><b>Heading to ${esc(S.via.brand)}</b><br>${r.legEnds.length ? fmtDist(Math.max(0, r.cum[r.legEnds[0]] - S.along)) + ' away' : 'On your way'} · tap to cancel stop</div><div class="price">${fmtP(S.via.prices[P.fuel])}</div>`;
+      <div class="txt"><div class="ln"><b>Heading to ${esc(S.via.brand)}</b></div><div class="ln">${r.legEnds.length ? fmtDist(Math.max(0, r.cum[r.legEnds[0]] - S.along)) + ' away' : 'On your way'}</div><div class="ln muted">Tap to cancel this stop</div></div><div class="price">${fmtP(S.via.prices[P.fuel])}</div>`;
     card.onclick = cancelVia; show('fuelCard', true); placeRecenter(); return;
   }
   if (!within.length) { show('fuelCard', false); return; }
   const b = within[0], paid = parseFloat(P.paid), dear = paid && b.price > paid;
   card.innerHTML = `<div class="pump ${dear ? 'dear' : ''}"><svg width="22" height="22" viewBox="0 0 24 24" fill="${dear ? '#f29900' : '#0b8043'}"><path d="m19.77 7.23-3.72-3.72L15 4.56l2.11 2.11A2.5 2.5 0 0 0 17.5 11.5c.36 0 .69-.08 1-.21v7.21a1 1 0 0 1-2 0V14a2 2 0 0 0-2-2h-1V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v16h10v-7.5h1.5v5a2.5 2.5 0 0 0 5 0V9c0-.69-.28-1.32-.73-1.77M12 10H6V5h6z"/></svg></div>
-    <div class="txt"><b>${esc(b.st.brand)}</b>${demoBadge(b.st)}<br>In ${fmtDist(b.along - S.along)} · ${fmtDist(b.d)} off route<br>${priceDiffHTML(b.price) || '<span class="muted">Cheapest in the next 40 miles</span>'}</div>
+    <div class="txt"><div class="ln"><b>${esc(b.st.brand)}</b>${demoBadge(b.st)}</div><div class="ln">In ${fmtDist(b.along - S.along)} · ${fmtDist(b.d)} off route</div><div class="ln">${shortDiffHTML(b.price) || '<span class="muted">Cheapest in the next 40 mi</span>'}</div></div>
     <div class="price ${dear ? 'dear' : ''}">${fmtP(b.price)}</div>`;
   card.onclick = () => previewDetour(b.st);
   show('fuelCard', true); placeRecenter();

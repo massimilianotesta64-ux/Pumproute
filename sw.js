@@ -1,6 +1,6 @@
 // PumpRoute service worker: caches the app shell so it opens instantly and installs as an app.
 // Live data (maps, routes, prices, traffic) always comes from the network.
-const CACHE = 'pumproute-v8';
+const CACHE = 'pumproute-v9';
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
