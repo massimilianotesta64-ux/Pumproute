@@ -300,7 +300,8 @@ input{font:inherit;color:inherit}
     <div class="switch"><span>3D tilted map while driving</span><input type="checkbox" id="optTilt"></div>
 
     <label class="lbl">Live traffic: TomTom API key</label>
-    <div class="field sm"><input id="optTomtom" type="text" autocomplete="off" spellcheck="false" placeholder="Paste free key from developer.tomtom.com"></div>
+    <div class="field sm"><input id="optTomtom" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste free key from my.tomtom.com"><button class="btn btn-outline" style="height:34px;padding:0 12px;font-size:13px" id="btnTestKey" type="button">Test key</button></div>
+    <div id="ttTestOut" class="note" style="font-size:13px"></div>
     <div class="note">With a key: traffic-aware routes and arrival times, jams shown on the map, and faster-route alerts. Without one, routing still works but ignores traffic.</div>
 
     <label class="lbl">Live fuel price feed URL</label>
@@ -487,7 +488,10 @@ async function getJSON(url, opts = {}, timeout = 20000) {
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout);
   try {
     const r = await fetch(url, Object.assign({ signal: ctl.signal }, opts));
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) {
+      let detail = ''; try { const tx = await r.text(); try { const j = JSON.parse(tx); detail = j.detailedError?.message || j.error?.description || j.errorText || j.message || j.error || tx; } catch (e) { detail = tx; } } catch (e) {}
+      throw new Error('HTTP ' + r.status + (detail ? ': ' + String(typeof detail === 'string' ? detail : JSON.stringify(detail)).slice(0, 160) : ''));
+    }
     return await r.json();
   } finally { clearTimeout(t); }
 }
@@ -672,6 +676,33 @@ function normTomTom(r) {
   const sm = r.summary;
   return { provider: 'tomtom', coords, steps, legEnds, distance: sm.lengthInMeters, duration: sm.travelTimeInSeconds, delay: sm.trafficDelayInSeconds || 0, traffic, via };
 }
+function tomtomReason(e) {
+  const m = (e && e.message) || String(e);
+  if (/abort/i.test(m)) return 'TomTom took too long to answer';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'TomTom could not be reached or blocked the request: ' + m;
+  if (/HTTP 403/.test(m)) return 'key refused (403). Check the key and any domain restriction: ' + m;
+  if (/HTTP 401/.test(m)) return 'key not recognised (401): ' + m;
+  if (/HTTP 429/.test(m)) return 'daily free limit reached (429)';
+  return m;
+}
+async function testTomTomKey(key) {
+  const out = $('ttTestOut'); out.innerHTML = '<span class="spinner"></span> Testing…';
+  key = (key || '').trim().replace(/\s+/g, '');
+  if (!key) { out.textContent = 'Paste a key first.'; return; }
+  const lines = [];
+  try {
+    const j = await getJSON(`${CFG.tomtom}routing/1/calculateRoute/51.50740,-0.12780:51.75200,-1.25770/json?key=${encodeURIComponent(key)}&traffic=true&instructionsType=text&language=en-GB`, {}, 15000);
+    const sm = j.routes[0].summary;
+    lines.push(`✅ Key works with live traffic. Test route London → Oxford: ${fmtDur(sm.travelTimeInSeconds)} (traffic delay ${fmtDur(sm.trafficDelayInSeconds || 0)}).`);
+  } catch (e) {
+    lines.push('❌ Standard routing: ' + tomtomReason(e));
+    try {
+      await getJSON(`${CFG.tomtom}maps/orbis/routing/calculateRoute/51.50740,-0.12780:51.75200,-1.25770/json?key=${encodeURIComponent(key)}&apiVersion=2`, {}, 15000);
+      lines.push('ℹ️ Orbis routing works with this key, so the key is valid but lacks the standard Routing API. Tell Claude this exact message.');
+    } catch (e2) { lines.push('❌ Orbis routing: ' + tomtomReason(e2)); }
+  }
+  out.innerHTML = lines.map(esc).join('<br>');
+}
 async function routeTomTom(pts, alts) {
   const path = pts.map(p => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`).join(':');
   const q = new URLSearchParams({
@@ -688,7 +719,7 @@ async function getRoutes(pts, alts = true) {
   let rs;
   if (P.tomtom) {
     try { rs = await routeTomTom(pts, alts); }
-    catch (e) { console.warn('TomTom failed, falling back to OSRM', e); toast('Live traffic unavailable just now, using standard routing'); }
+    catch (e) { console.warn('TomTom failed, falling back to OSRM', e); toast('Live traffic unavailable (' + esc(tomtomReason(e)) + '). Using standard routing.', null, 8000); }
   }
   if (!rs) rs = await routeOSRM(pts, alts);
   return rs.map(prepRoute);
@@ -1081,7 +1112,7 @@ async function chooseDest(r) {
     console.warn(e); $('routeCards').innerHTML = `<div class="rcard muted">Couldn't find a route just now. Check your signal and try again.</div>`; return;
   }
   S.routes.forEach(rt => { rt._stationsLoaded = false; });
-  $('trafficNote').innerHTML = S.routes[0].provider === 'tomtom' ? '<span class="badge ok">LIVE TRAFFIC</span> Times include current traffic' : '<span class="badge info">NO LIVE TRAFFIC</span> Add a free TomTom key in Settings for traffic';
+  $('trafficNote').innerHTML = S.routes[0].provider === 'tomtom' ? '<span class="badge ok">LIVE TRAFFIC</span> Times include current traffic' : (P.tomtom ? '<span class="badge">NO LIVE TRAFFIC</span> Your TomTom key was refused. Open ⚙ Settings → Test key to see why' : '<span class="badge info">NO LIVE TRAFFIC</span> Add a free TomTom key in Settings for traffic');
   selectRoute(0, true);
 }
 function renderRouteCards() {
@@ -1441,6 +1472,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // Settings
 // =====================================================================
 function openSettings() {
+  $('ttTestOut').textContent = '';
   buildChips('fuelChips2');
   $('paidInput2').value = P.paid || '';
   $('radiusInput2').value = P.radius; $('radiusOut2').textContent = P.radius + ' mi';
@@ -1455,7 +1487,7 @@ function saveSettings() {
   const before = JSON.stringify([P.fuel, P.radius, P.tomtom, P.feed, P.tolls]);
   P.paid = $('paidInput2').value.trim(); P.radius = parseFloat($('radiusInput2').value) || 3;
   P.voice = $('optVoice').checked; P.tolls = $('optTolls').checked; P.tilt = $('optTilt').checked;
-  P.tomtom = $('optTomtom').value.trim(); P.feed = $('optFeed').value.trim(); P.sim = $('optSim').checked; P.simSpeed = +$('optSimSpeed').value || 4;
+  P.tomtom = $('optTomtom').value.trim().replace(/\s+/g, ''); P.feed = $('optFeed').value.trim(); P.sim = $('optSim').checked; P.simSpeed = +$('optSimSpeed').value || 4;
   savePrefs(); show('settings', false);
   const changed = before !== JSON.stringify([P.fuel, P.radius, P.tomtom, P.feed, P.tolls]);
   if (changed && P.feed) { S.stations.clear(); }
@@ -1474,7 +1506,8 @@ function muteIcon() {
 // =====================================================================
 function wire() {
   initSetup(); initSearch();
-  $('btnSettings').onclick = openSettings; $('btnCloseSettings').onclick = () => show('settings', false); $('btnSaveSettings').onclick = saveSettings;
+  $('btnSettings').onclick = openSettings;
+  $('btnTestKey').onclick = () => testTomTomKey($('optTomtom').value); $('btnCloseSettings').onclick = () => show('settings', false); $('btnSaveSettings').onclick = saveSettings;
   $('btnCloseRoutes').onclick = cancelRoutes;
   $('btnGo').onclick = () => { say(' ', true); startNav(); };
   $('btnEnd').onclick = () => { say('Route ended.'); endNav(false); };
